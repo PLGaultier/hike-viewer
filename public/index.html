@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hike Viewer</title>
+  <link rel="stylesheet" href="/vendor/maplibre-gl/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="stage">
+   <div id="shot">
+    <div id="map"></div>
+
+    <!-- Everything inside #overlay is redrawn onto the video frames. -->
+    <div id="overlay">
+      <div id="hud">
+        <div class="hud-title" id="hudTitle">Hiking</div>
+        <div class="hud-row">
+          <div class="stat"><span class="v" id="statDist">0.00</span><span class="u">km</span></div>
+          <div class="stat"><span class="v" id="statEle">0</span><span class="u">m</span></div>
+          <div class="stat"><span class="v" id="statAsc">0</span><span class="u">m ↑</span></div>
+          <div class="stat"><span class="v" id="statTime">0h 00</span><span class="u">elapsed</span></div>
+        </div>
+        <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+      </div>
+
+      <figure id="photoCard">
+        <img id="photoImg" alt="" />
+        <figcaption><span id="photoMeta"></span></figcaption>
+      </figure>
+    </div>
+
+    <div id="status"></div>
+   </div>
+  </div>
+
+  <aside id="panel">
+    <header>
+      <h1>Hike Viewer</h1>
+      <p id="summary">Loading…</p>
+    </header>
+
+    <section id="makeSection">
+      <button id="btnMake" class="primary big">Create video</button>
+      <p class="hint" id="makeHint">60 seconds · 1080p · stops on each photo</p>
+
+      <div id="progress" hidden>
+        <div class="pbar"><div class="pbar-fill" id="pbarFill"></div></div>
+        <p class="hint" id="progressText">Starting…</p>
+      </div>
+
+      <div id="result" hidden>
+        <video id="resultVideo" controls playsinline></video>
+        <a id="resultLink" class="dl" download>Save video</a>
+      </div>
+
+      <button id="btnPreview" class="ghost">Preview in browser</button>
+    </section>
+
+    <section>
+      <h2>Photos on the route</h2>
+      <ul id="photoList"></ul>
+    </section>
+  </aside>
+
+  <script src="/vendor/maplibre-gl/dist/maplibre-gl.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

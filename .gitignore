@@ -1,0 +1,20 @@
+node_modules/
+.cache/
+out/
+.DS_Store
+
+# Your hike lives in this folder but does not belong in the repo: photos carry
+# EXIF (sometimes GPS) and a GPX is a precise record of where someone walked.
+# Drop your own files in alongside the code — see the README.
+*.gpx
+*.JPG
+*.jpg
+*.jpeg
+*.JPEG
+*.png
+*.PNG
+*.HEIC
+*.heic
+*.fit
+*.tcx
+*.zip
