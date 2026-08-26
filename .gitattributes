@@ -1,0 +1,7 @@
+# Batch files are parsed by cmd.exe, which wants CRLF. Without this a clone on
+# macOS or Linux could normalise them to LF and Windows would choke.
+*.bat text eol=crlf
+
+# The shell counterparts must stay LF for the same reason in reverse.
+*.sh text eol=lf
+*.command text eol=lf

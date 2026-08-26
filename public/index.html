@@ -32,6 +32,17 @@
     </div>
 
     <div id="status"></div>
+
+    <!-- Shown when there is no hike at all: the map area becomes the target. -->
+    <div id="empty" hidden>
+      <div class="empty-inner">
+        <div class="empty-icon">⛰</div>
+        <h2>Drop a hike here</h2>
+        <p>One <code>.gpx</code> track plus the photos you took on it.<br />
+           A folder of photos works too.</p>
+        <button id="btnPickEmpty" class="primary">Choose files…</button>
+      </div>
+    </div>
    </div>
   </div>
 
@@ -40,6 +51,21 @@
       <h1>Hike Viewer</h1>
       <p id="summary">Loading…</p>
     </header>
+
+    <section id="loadSection">
+      <h2>Hike</h2>
+      <select id="hikeSelect"></select>
+      <div class="row">
+        <button id="btnPick" class="ghost">Drop or choose files…</button>
+        <button id="btnDelete" class="ghost danger" title="Delete this upload" hidden>Delete</button>
+      </div>
+      <p class="hint" id="loadHint">Drag a .gpx and photos anywhere on this window.</p>
+
+      <div id="upload" hidden>
+        <div class="pbar"><div class="pbar-fill" id="upbarFill"></div></div>
+        <p class="hint" id="uploadText">Uploading…</p>
+      </div>
+    </section>
 
     <section id="makeSection">
       <button id="btnMake" class="primary big">Create video</button>
@@ -58,11 +84,15 @@
       <button id="btnPreview" class="ghost">Preview in browser</button>
     </section>
 
-    <section>
+    <section id="photoSection">
       <h2>Photos on the route</h2>
       <ul id="photoList"></ul>
     </section>
   </aside>
+
+  <!-- Full-window drop target, only visible while something is being dragged. -->
+  <div id="dropzone"><div class="dz-inner"><div class="dz-icon">⛰</div><p id="dzText">Drop a .gpx and photos</p></div></div>
+  <input id="filePicker" type="file" multiple accept=".gpx,image/*,.heic,.HEIC" hidden />
 
   <script src="/vendor/maplibre-gl/dist/maplibre-gl.js"></script>
   <script src="/app.js"></script>

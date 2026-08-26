@@ -121,3 +121,40 @@ select {
   width: 100%; margin-top: 7px; padding: 7px; border-radius: 6px;
   background: #21262d; color: var(--ink); border: 1px solid var(--line); font-size: 13px;
 }
+
+/* ---- loading a hike: drop zone, picker, empty state ---- */
+
+/* Covers the whole window while a drag is in flight, so the user never has to
+   aim at a small target with a folder of photos held under the cursor. */
+#dropzone {
+  position: fixed; inset: 0; z-index: 50; display: none;
+  place-items: center; background: rgba(14, 17, 22, .82);
+  backdrop-filter: blur(3px);
+}
+#dropzone.on { display: grid; }
+.dz-inner {
+  border: 2px dashed var(--accent); border-radius: 14px;
+  padding: 46px 74px; text-align: center; background: rgba(22, 27, 34, .9);
+}
+.dz-icon { font-size: 40px; line-height: 1; margin-bottom: 12px; }
+#dzText { margin: 0; font-size: 16px; font-weight: 600; }
+
+#empty {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  background: #0e1116; text-align: center; padding: 24px;
+}
+#empty[hidden] { display: none; }
+.empty-icon { font-size: 46px; line-height: 1; margin-bottom: 14px; opacity: .8; }
+#empty h2 { margin: 0 0 8px; font-size: 20px; }
+#empty p { margin: 0 0 20px; color: var(--dim); font-size: 13px; line-height: 1.7; }
+#empty code { background: #1c2128; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+#empty button { padding: 10px 20px; }
+
+#loadSection .row { display: flex; gap: 8px; margin-top: 10px; }
+#loadSection .row button { margin-top: 0; }
+#btnDelete { flex: none; width: auto; padding: 7px 12px; }
+button.danger:hover:not(:disabled) { color: #ff7b72; border-color: #5a2b28; background: #2a1a19; }
+
+/* A hike that failed to build still needs to be selectable, so it is listed
+   rather than hidden — greyed, with the reason in the summary. */
+#hikeSelect option.broken { color: var(--warn); }

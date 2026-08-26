@@ -1,6 +1,8 @@
 node_modules/
 .cache/
 out/
+# Hikes dropped on the UI: someone else's GPX and photos, same reasons as below.
+uploads/
 .DS_Store
 
 # Your hike lives in this folder but does not belong in the repo: photos carry

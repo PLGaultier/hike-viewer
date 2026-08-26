@@ -4,7 +4,8 @@ const $ = (id) => document.getElementById(id);
 const DEM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
 const SAT = 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 
-let hike, pts, map;
+// hikeId is read by render/record.mjs to address the frames it posts back.
+let hike, pts, map, hikeId = null;
 // Fixed preset. These were tuned on real tracks; the UI does not ask the user
 // to choose, and render/record.mjs can still override them from the CLI.
 const opts = { duration: 60, dwell: 4, exag: 1.0, pitch: 68, zoom: 14.2, res: 1080 };
@@ -19,8 +20,8 @@ function unpack(raw) {
 }
 
 // Position at a fraction of total *distance*. Driving the animation by distance
-// rather than by clock time matters: this hike has 15 recording gaps (one of
-// 69 minutes), and a time-driven camera would sit frozen through every one.
+// rather than by clock time matters: a track with recording gaps (this one has
+// 15, the longest 69 minutes) would leave a time-driven camera frozen in each.
 function sampleAt(progress) {
   const target = progress * pts[pts.length - 1].dist;
   let lo = 0, hi = pts.length - 1;
@@ -112,8 +113,8 @@ function stateAt(time) {
 
 /* -------------------------------------------------------------------- map */
 
-async function initMap() {
-  map = new maplibregl.Map({
+async function initMap(stale) {
+  const m = building = new maplibregl.Map({
     container: 'map',
     // Required so the canvas can be read back for frame-by-frame capture.
     preserveDrawingBuffer: true,
@@ -144,13 +145,17 @@ async function initMap() {
     },
   });
 
-  await new Promise((r) => map.on('load', r));
+  await new Promise((r) => m.on('load', r));
+  // Switching hikes mid-load removed this one already; do not go on to
+  // decorate it, and never publish it as the current map.
+  if (stale()) return null;
 
-  map.setTerrain({ source: 'dem', exaggeration: opts.exag });
+
+  m.setTerrain({ source: 'dem', exaggeration: opts.exag });
 
   // Whole route, dimmed — gives the viewer the shape of the day up front.
-  map.addSource('route', { type: 'geojson', data: lineOf(0, 1) });
-  map.addLayer({ id: 'route', type: 'line', source: 'route',
+  m.addSource('route', { type: 'geojson', data: lineOf(0, 1) });
+  m.addLayer({ id: 'route', type: 'line', source: 'route',
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': '#ffffff',
@@ -159,27 +164,27 @@ async function initMap() {
     } });
 
   // The part already walked, drawn bright on top.
-  map.addSource('trail', { type: 'geojson', data: lineOf(0, 0) });
-  map.addLayer({ id: 'trail-glow', type: 'line', source: 'trail',
+  m.addSource('trail', { type: 'geojson', data: lineOf(0, 0) });
+  m.addLayer({ id: 'trail-glow', type: 'line', source: 'trail',
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': '#ff6b35', 'line-opacity': 0.45, 'line-blur': 10,
       'line-width': ['interpolate', ['linear'], ['zoom'], 11, 9, 14, 18, 16, 26],
     } });
-  map.addLayer({ id: 'trail', type: 'line', source: 'trail',
+  m.addLayer({ id: 'trail', type: 'line', source: 'trail',
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': '#ff6b35',
       'line-width': ['interpolate', ['linear'], ['zoom'], 11, 2.5, 14, 5, 16, 8],
     } });
 
-  map.addSource('here', { type: 'geojson', data: pointOf(pts[0]) });
-  map.addLayer({ id: 'here-halo', type: 'circle', source: 'here',
+  m.addSource('here', { type: 'geojson', data: pointOf(pts[0]) });
+  m.addLayer({ id: 'here-halo', type: 'circle', source: 'here',
     paint: {
       'circle-color': '#ff6b35', 'circle-opacity': 0.3, 'circle-blur': 0.45,
       'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 12, 14, 22, 16, 32],
     } });
-  map.addLayer({ id: 'here', type: 'circle', source: 'here',
+  m.addLayer({ id: 'here', type: 'circle', source: 'here',
     paint: {
       'circle-color': '#ffffff', 'circle-stroke-color': '#ff6b35',
       'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 5, 14, 8, 16, 11],
@@ -187,16 +192,22 @@ async function initMap() {
     } });
 
   // Markers where photos sit, so they are visible before you reach them.
-  map.addSource('shots', {
+  m.addSource('shots', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: hike.photos.map((p) => pointOf(p)) },
   });
-  map.addLayer({ id: 'shots', type: 'circle', source: 'shots',
+  m.addLayer({ id: 'shots', type: 'circle', source: 'shots',
     paint: {
       'circle-color': '#ffd166', 'circle-stroke-color': 'rgba(0,0,0,.6)',
       'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 4, 14, 6.5, 16, 9],
       'circle-stroke-width': 2,
     } });
+
+  // Published only now that it is fully built: everything else in the app
+  // reaches the map through this global.
+  building = null;
+  map = m;
+  return m;
 }
 
 const pointOf = (p) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [p.lon, p.lat] } });
@@ -217,7 +228,7 @@ const MAX_DUCK = 34;        // most degrees of pitch we will give up
 
 // Chase camera that will not fly through a mountain.
 //
-// Descending into the gorge, the camera trails below the ridge just crossed and
+// Descending into a gorge, the camera trails below the ridge just crossed and
 // ends up inside the terrain mesh, which renders as smeared backfaces. Terrain
 // exaggeration makes it worse by multiplying every height: at 1.5x a 3539 m
 // ridge is drawn at 5309 m.
@@ -345,13 +356,6 @@ function stop() {
   $('btnPreview').textContent = 'Preview in browser';
 }
 
-function reset() {
-  stop();
-  anim.t = 0;
-  anim.bearing = null;
-  applyState(0);
-}
-
 /* ------------------------------------------------------------- compositor */
 
 // The HUD is DOM for live preview, but video frames are assembled here so both
@@ -389,13 +393,13 @@ function composite(st) {
   const x = 30 * s, base = H - 34 * s;
   cx.fillStyle = 'rgba(255,255,255,.85)';
   cx.font = `600 ${15 * s}px ui-sans-serif, system-ui, sans-serif`;
-  cx.fillText((hike.source.name || 'Hiking').toUpperCase(), x, base - 74 * s);
+  cx.fillText(hikeTitle().toUpperCase(), x, base - 74 * s);
 
   const stats = [
     [(here.dist / 1000).toFixed(2), 'km'],
     [String(Math.round(here.ele)), 'm'],
     [String(Math.round(ascentSoFar)), 'm ↑'],
-    [elapsed(here.t), 'local'],
+    [elapsed(here.t), 'elapsed'],
   ];
   let sx = x;
   for (const [v, u] of stats) {
@@ -420,6 +424,10 @@ function composite(st) {
   if (st.photo) drawPhotoCard(st, s, W, H);
   return comp;
 }
+
+// A GPX from Garmin carries a track name; one exported from a phone app often
+// does not, and "Hiking" over a nameless track beats an empty line.
+const hikeTitle = () => hike.source.name || hike.source.label || 'Hiking';
 
 function drawPhotoCard(st, s, W, H) {
   const im = photoCache.get(st.photo.src);
@@ -507,7 +515,7 @@ function settled(timeoutMs = 2500) {
   });
 }
 
-/* ------------------------------------------------------------------- boot */
+/* ----------------------------------------------------------- photo panel */
 
 function renderPhotoList() {
   const ul = $('photoList');
@@ -530,17 +538,15 @@ function renderPhotoList() {
     li.innerHTML = `<div><div class="n">${p.file}</div><div class="d bad">${p.reason}</div></div>`;
     ul.appendChild(li);
   }
+  if (!hike.photos.length && !hike.rejected.length) {
+    ul.innerHTML = '<li><div><div class="d">No photos with this track — the flyover still renders.</div></div></li>';
+  }
 }
 
 const timeAtProgress = (prog) => {
   const seg = timeline.find((s) => s.kind === 'hold' && Math.abs(s.at - prog) < 1e-9);
   return seg ? seg.start + (seg.end - seg.start) * 0.4 : 0;
 };
-
-function wireControls() {
-  $('btnPreview').onclick = () => (anim.playing ? stop() : play());
-  $('btnMake').onclick = makeVideo;
-}
 
 /* ------------------------------------------------------------ make video */
 
@@ -556,7 +562,7 @@ async function makeVideo() {
   $('progress').hidden = false;
   setProgress(0, 'Starting…');
 
-  const r = await fetch('/api/render', { method: 'POST' });
+  const r = await fetch(`/api/render?id=${hikeId}`, { method: 'POST' });
   if (!r.ok) return failMake((await r.json()).error ?? 'could not start');
 
   const poll = setInterval(async () => {
@@ -576,10 +582,7 @@ async function makeVideo() {
     if (s.stage === 'done' && s.file) {
       setProgress(1, 'Done');
       $('progress').hidden = true;
-      $('result').hidden = false;
-      $('resultVideo').src = s.file;
-      $('resultLink').href = s.file;
-      $('resultLink').setAttribute('download', 'hike.mp4');
+      showVideo(s.file);
       $('btnMake').disabled = false;
       $('btnMake').textContent = 'Create video again';
     } else if (s.stage === 'failed') {
@@ -588,17 +591,22 @@ async function makeVideo() {
   }, 1000);
 }
 
+function showVideo(src) {
+  $('result').hidden = false;
+  $('resultVideo').src = src;
+  $('resultLink').href = src;
+  $('resultLink').setAttribute('download', `${hike.source.label || 'hike'}.mp4`);
+}
+
 // A finished video outlives the page session, so surface one that already
-// exists instead of making the user render again to see it.
+// exists for this hike instead of making the user render again to see it.
 async function showExistingVideo() {
+  $('result').hidden = true;
+  $('btnMake').textContent = 'Create video';
   try {
-    const r = await fetch('/out/hike.mp4', { method: 'HEAD' });
+    const r = await fetch(hike.video, { method: 'HEAD' });
     if (!r.ok) return;
-    const src = '/out/hike.mp4?t=' + Date.now();
-    $('resultVideo').src = src;
-    $('resultLink').href = src;
-    $('resultLink').setAttribute('download', 'hike.mp4');
-    $('result').hidden = false;
+    showVideo(`${hike.video}?t=${Date.now()}`);
     $('btnMake').textContent = 'Create video again';
   } catch {}
 }
@@ -615,32 +623,287 @@ function failMake(message) {
   flash(`Render failed — ${message}`);
 }
 
-(async function boot() {
-  hike = await (await fetch('/api/hike')).json();
-  if (hike.error) { $('summary').textContent = hike.error; return; }
-  pts = unpack(hike.track.points);
+/* --------------------------------------------------------- loading a hike */
 
+const GPX_RE = /\.gpx$/i;
+const IMAGE_RE = /\.(jpe?g|png|heic)$/i;
+
+// Everything that has to be forgotten when one hike is replaced by another.
+// Left behind, a stale photo cache paints the previous hike's pictures onto the
+// new one's frames, and a stale timeline holds on stops that no longer exist.
+function teardown() {
+  stop();
+  anim.t = 0;
+  anim.bearing = null;
+  shownPhoto = null;
+  ascentSoFar = 0;
+  timeline = [];
+  photoCache.clear();
+  $('photoCard').classList.remove('on');
+  $('photoImg').removeAttribute('src');
+  // `building` is a map whose 'load' has not fired yet. Without this it would
+  // never be reachable to remove, and would sit in #map holding a live WebGL
+  // context — browsers hand out about 16 of those before they start killing
+  // the oldest, so a dozen hike switches would take the map down.
+  if (building) { building.remove(); building = null; }
+  if (map) { map.remove(); map = null; }
+}
+
+// Loading a hike is several seconds of network — the GPX, then terrain tiles.
+// Picking a different one before that finishes starts a second run against the
+// same globals, and the two interleave: layers added to the wrong map, an
+// orphaned canvas left stacked in #map. Each run takes a ticket and drops out
+// the moment a newer one exists.
+let loadSeq = 0;
+let building = null;
+
+async function loadHike(id) {
+  const seq = ++loadSeq;
+  const stale = () => seq !== loadSeq;
+
+  teardown();
+  flash('Reading hike…');
+
+  const data = await (await fetch(`/api/hike${id ? `?id=${encodeURIComponent(id)}` : ''}`)).json();
+  if (stale()) return;
+
+  if (data.empty || data.error) {
+    hike = null;
+    hikeId = null;
+    showEmpty(data.reason ?? data.error);
+    await refreshHikeList();
+    return;
+  }
+
+  hike = data;
+  hikeId = data.id;
+  pts = unpack(hike.track.points);
   startTime = hike.track.stats.startTime;
 
+  // Keep the URL addressing this hike, so a reload — and the headless renderer,
+  // which opens the page by URL — lands on the same one.
+  const url = new URL(location.href);
+  url.searchParams.set('hike', hikeId);
+  history.replaceState(null, '', url);
+
+  $('empty').hidden = true;
+  $('makeSection').hidden = false;
+  $('photoSection').hidden = false;
+  $('btnMake').disabled = false;
+
   const s = hike.track.stats;
-  $('hudTitle').textContent = hike.source.name || 'Hiking';
+  $('hudTitle').textContent = hikeTitle();
   $('summary').innerHTML =
+    `<b>${hike.source.gpx}</b><br>` +
     `${(s.distance / 1000).toFixed(1)} km · ${Math.round(s.ascent)} m ascent · ` +
     `${(s.duration / 3600000).toFixed(1)} h<br>` +
     `${Math.round(s.minEle)}–${Math.round(s.maxEle)} m`;
 
   renderPhotoList();
   buildTimeline();
-  wireControls();
   showExistingVideo();
+  await refreshHikeList();
+  if (stale()) return;
+
   await visible();
+  if (stale()) return;
   flash('Loading terrain…');
-  await initMap();
+  if (!await initMap(stale)) return;
   await warmPhotos();
+  if (stale()) return;
   applyState(0);
   // The first tiles over remote terrain take a few seconds; say so rather than
   // showing an unexplained black rectangle.
   await settled(15000);
+  if (stale()) return;
   flash('Ready');
   setTimeout(() => flash(''), 1400);
+}
+
+function showEmpty(message) {
+  $('empty').hidden = false;
+  $('makeSection').hidden = true;
+  $('photoSection').hidden = true;
+  $('summary').textContent = message ?? 'No hike loaded.';
+  $('hudTitle').textContent = 'Hiking';
+  flash('');
+}
+
+async function refreshHikeList() {
+  const { hikes } = await (await fetch('/api/hikes')).json();
+  const sel = $('hikeSelect');
+  sel.innerHTML = '';
+  for (const h of hikes) {
+    const o = document.createElement('option');
+    o.value = h.id;
+    o.textContent = `${h.label} — ${h.photos} photo${h.photos === 1 ? '' : 's'}`;
+    if (!h.gpx) { o.textContent = `${h.label} (no .gpx)`; o.className = 'broken'; }
+    o.selected = h.id === hikeId;
+    sel.appendChild(o);
+  }
+  sel.hidden = hikes.length === 0;
+  // The folder hike is not ours to delete — its files are the user's working
+  // directory, not something the app put there.
+  $('btnDelete').hidden = !hikeId || hikeId === 'folder';
+}
+
+/* ------------------------------------------------------------- drag & drop */
+
+// A drop can be a mix of loose files and folders. DataTransferItemList is
+// emptied the moment this handler returns, so every entry is grabbed up front
+// and only then walked asynchronously.
+async function filesFromDrop(dataTransfer) {
+  const entries = [...dataTransfer.items]
+    .filter((i) => i.kind === 'file')
+    .map((i) => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null));
+
+  if (entries.some(Boolean)) {
+    const out = [];
+    await Promise.all(entries.filter(Boolean).map((e) => walkEntry(e, out)));
+    return out;
+  }
+  return [...dataTransfer.files];
+}
+
+// Recurses into dropped folders — dragging a camera import folder in is the
+// obvious gesture, and it would otherwise silently yield nothing.
+async function walkEntry(entry, out, depth = 0) {
+  if (entry.isFile) {
+    return new Promise((res) => entry.file((f) => { out.push(f); res(); }, res));
+  }
+  if (!entry.isDirectory || depth > 4) return;
+  const reader = entry.createReader();
+  // readEntries returns at most 100 at a time and signals the end with an empty
+  // batch; a single call quietly truncates a folder of holiday photos.
+  for (;;) {
+    const batch = await new Promise((res) => reader.readEntries(res, () => res([])));
+    if (!batch.length) return;
+    await Promise.all(batch.map((e) => walkEntry(e, out, depth + 1)));
+  }
+}
+
+async function acceptFiles(all) {
+  const files = all.filter((f) => !f.name.startsWith('.') && (GPX_RE.test(f.name) || IMAGE_RE.test(f.name)));
+  const tracks = files.filter((f) => GPX_RE.test(f.name));
+  const photos = files.filter((f) => IMAGE_RE.test(f.name));
+
+  if (!tracks.length) {
+    $('loadHint').innerHTML = all.length
+      ? '<span class="bad">No .gpx in what you dropped.</span> A hike needs exactly one track file.'
+      : 'Drag a .gpx and photos anywhere on this window.';
+    return;
+  }
+
+  // One track per hike. Dropping a whole export folder would otherwise pick an
+  // arbitrary one; say which was used instead of choosing silently.
+  const track = tracks[0];
+  const extra = tracks.length > 1 ? ` (ignored ${tracks.length - 1} other .gpx)` : '';
+
+  const chosen = [track, ...photos];
+  const totalBytes = chosen.reduce((n, f) => n + f.size, 0);
+
+  $('upload').hidden = false;
+  $('btnPick').disabled = true;
+  let sentBytes = 0;
+  const showUpload = (extraBytes, name, i) => {
+    const frac = totalBytes ? (sentBytes + extraBytes) / totalBytes : 1;
+    $('upbarFill').style.width = `${Math.round(frac * 100)}%`;
+    $('uploadText').textContent = `Uploading ${i + 1} of ${chosen.length} — ${name}`;
+  };
+
+  try {
+    const { id } = await (await fetch('/api/hikes', { method: 'POST' })).json();
+    for (const [i, f] of chosen.entries()) {
+      showUpload(0, f.name, i);
+      await putFile(id, f, (loaded) => showUpload(loaded, f.name, i));
+      sentBytes += f.size;
+    }
+    $('uploadText').textContent = 'Reading EXIF and placing photos…';
+    // fresh: the hike was cached as unbuildable while its files were arriving.
+    await fetch(`/api/hike?id=${id}&fresh`);
+    $('upload').hidden = true;
+    $('loadHint').textContent =
+      `Loaded ${track.name}${photos.length ? ` with ${photos.length} photo${photos.length === 1 ? '' : 's'}` : ''}.${extra}`;
+    await loadHike(id);
+  } catch (err) {
+    $('loadHint').innerHTML = `<span class="bad">Upload failed — ${err.message}</span>`;
+    $('upload').hidden = true;
+  } finally {
+    $('btnPick').disabled = false;
+  }
+}
+
+// XHR rather than fetch: an 11 MB photo takes long enough that a progress bar
+// that only moves between files reads as a hang.
+function putFile(id, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', `/api/hikes/${id}/file?name=${encodeURIComponent(file.name)}`);
+    xhr.upload.onprogress = (e) => onProgress(e.loaded);
+    xhr.onload = () => (xhr.status < 300 ? resolve() : reject(new Error(`${file.name}: HTTP ${xhr.status}`)));
+    xhr.onerror = () => reject(new Error(`${file.name}: connection lost`));
+    xhr.send(file);
+  });
+}
+
+function wireDropZone() {
+  const zone = $('dropzone');
+  // dragenter/dragleave fire for every child element the cursor crosses, so a
+  // plain toggle flickers. Counting them is the standard fix.
+  let depth = 0;
+
+  addEventListener('dragenter', (e) => {
+    if (![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    if (depth++ === 0) zone.classList.add('on');
+  });
+  addEventListener('dragover', (e) => {
+    if (![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; zone.classList.remove('on'); } });
+  addEventListener('drop', async (e) => {
+    if (![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    depth = 0;
+    zone.classList.remove('on');
+    $('dzText').textContent = 'Reading…';
+    const files = await filesFromDrop(e.dataTransfer);
+    $('dzText').textContent = 'Drop a .gpx and photos';
+    await acceptFiles(files);
+  });
+}
+
+function wireControls() {
+  $('btnPreview').onclick = () => (anim.playing ? stop() : play());
+  $('btnMake').onclick = makeVideo;
+
+  const pick = () => $('filePicker').click();
+  $('btnPick').onclick = pick;
+  $('btnPickEmpty').onclick = pick;
+  $('filePicker').onchange = async (e) => {
+    const files = [...e.target.files];
+    e.target.value = '';           // so picking the same folder twice re-fires
+    await acceptFiles(files);
+  };
+
+  $('hikeSelect').onchange = (e) => loadHike(e.target.value);
+
+  $('btnDelete').onclick = async () => {
+    if (!hikeId || hikeId === 'folder') return;
+    await fetch(`/api/hikes/${hikeId}`, { method: 'DELETE' });
+    const { default: next } = await (await fetch('/api/hikes')).json();
+    hikeId = null;
+    await loadHike(next);
+  };
+
+  wireDropZone();
+}
+
+/* ------------------------------------------------------------------- boot */
+
+(async function boot() {
+  wireControls();
+  await loadHike(new URLSearchParams(location.search).get('hike'));
 })();
