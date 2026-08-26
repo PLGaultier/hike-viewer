@@ -234,7 +234,8 @@ camera in the first place.
 
 No API keys. Satellite imagery from Esri World Imagery, elevation from the
 Mapzen/AWS Terrarium DEM (`maxzoom` 15). Both are fetched by the browser as you
-pan, so the first load of a new area takes a moment.
+pan, so the first load of a new area takes a moment — and both carry their own
+terms of use, which are not this project's to grant. See [License](#license).
 
 ## When something goes wrong
 
@@ -293,3 +294,27 @@ orphaned canvas left stacked in the container holding a live WebGL context. Each
 load takes a ticket and drops out as soon as a newer one exists.
 
 Anything unplaceable is reported in the panel with the reason.
+
+## License
+
+The code in this repository is [MIT](LICENSE) — use it, change it, ship it.
+
+What it depends on is not all MIT, and two pieces are worth knowing about.
+
+**ffmpeg.** `npm install` fetches a prebuilt binary via `ffmpeg-static`, and
+that build is GPL rather than the LGPL plain ffmpeg carries — it is compiled
+`--enable-gpl --enable-libx264`, and x264 is GPL. That does not reach this
+project's code: the binary is never in this repository (npm downloads it onto
+your machine), and `render/to-mp4.mjs` runs it as a separate process with
+command-line arguments rather than linking against its libraries.
+
+It would matter if you packaged this up for distribution — a signed `.app`, an
+`.exe` installer, anything with ffmpeg *inside* it. At that point you are
+distributing a GPL binary and its terms apply to that bundle. The double-click
+launchers here do not do that; they run `npm install` like everyone else.
+
+**Map imagery.** The satellite tiles come from Esri World Imagery and the
+elevation from the Mapzen/AWS Terrarium DEM. Neither is covered by this
+project's license, and using them from something public is a different posture
+than one person looking at their own hike. Check their terms before pointing a
+crowd at this.

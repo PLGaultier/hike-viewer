@@ -2,6 +2,7 @@
   "name": "hike-viewer",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Local webapp that turns a GPX track + timestamped photos into an animated 3D flyover video",
   "engines": {
