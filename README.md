@@ -7,22 +7,47 @@ anywhere.
 
 ## Getting it running
 
-**The only thing you need to install is [Node](https://nodejs.org)** — take the
-version marked LTS. Everything else arrives with `npm install`.
+### 1. Get the files
 
-Once Node is installed, **double-click the launcher for your machine** — it
-installs what is missing the first time, then starts the app and opens your
-browser. No typing.
+**Without git — the easy way.** On the
+[repository page](https://github.com/PLGaultier/hike-viewer), click the green
+**Code** button, choose **Download ZIP**, and unzip it wherever you like. That
+is all; git is not needed to run this.
+
+**With git**, if you would rather clone it:
+
+```bash
+git clone https://github.com/PLGaultier/hike-viewer.git
+cd hike-viewer
+```
+
+Don't have git? `git --version` in a terminal will tell you. If it is missing:
+
+| | |
+|---|---|
+| **macOS** | Run `git --version` — macOS offers to install it for you. Otherwise [git-scm.com](https://git-scm.com/download/mac) |
+| **Windows** | [git-scm.com/download/win](https://git-scm.com/download/win), or `winget install Git.Git` |
+| **Linux** | `sudo apt-get install git` · `sudo dnf install git` · `sudo pacman -S git` |
+
+### 2. Install Node
+
+**The only thing you actually need is [Node](https://nodejs.org)** — take the
+version marked LTS and run the installer. Everything else arrives with
+`npm install`.
+
+### 3. Start it
+
+**Double-click the launcher for your machine** — it installs what is missing
+the first time, then starts the app and opens your browser. No typing.
 
 | | |
 |---|---|
 | **macOS** | `start.command` |
 | **Windows** | `start.bat` |
 
-From a terminal, on any platform:
+Or from a terminal, in the folder you just unzipped or cloned:
 
 ```bash
-git clone <this repo> && cd hike-viewer
 npm install        # also fetches ffmpeg and the Chromium that draws the frames
 npm run doctor     # confirms this machine can render
 npm start          # opens http://localhost:5173 in your browser
