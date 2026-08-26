@@ -13,6 +13,17 @@ const anim = { playing: false, t: 0, raf: null, last: 0, bearing: null };
 
 /* ------------------------------------------------------------------ track */
 
+// Points the recording stopped after. lib/gpx.js already finds these (a pause,
+// signal loss, a long lunch) and the matcher already refuses to interpolate a
+// photo across one — but the trail was still drawn straight through, which is
+// the same invention the matcher declines to make, only more visible. The
+// track is broken at these indices and the crossing drawn as a dash.
+let gapAfter = new Set();
+
+function markGaps(gaps) {
+  gapAfter = new Set((gaps ?? []).map((g) => g.index));
+}
+
 // Track points arrive as packed arrays [lon, lat, ele, t, dist] to keep the
 // payload small; unpack once into a shape the animation can index cheaply.
 function unpack(raw) {
@@ -68,6 +79,12 @@ function headingAt(progress) {
 // The video is a sequence of travel legs separated by a hold on each photo.
 let timeline = [];
 
+// A flyover that starts mid-chase and ends mid-chase reads as a clip. Opening
+// on the whole route and pulling back to it at the end gives the video a shape:
+// here is the day, here is walking it, here is what was walked.
+const INTRO = 3.5;
+const OUTRO = 4;
+
 function buildTimeline() {
   const stops = hike.photos.map((p) => p.progress).sort((a, b) => a - b);
 
@@ -77,9 +94,14 @@ function buildTimeline() {
   const hold = stops.length
     ? Math.min(opts.dwell, (opts.duration * 0.4) / stops.length)
     : opts.dwell;
-  const travel = Math.max(5, opts.duration - stops.length * hold);
+  // Taken out of the travel budget rather than added on top, so a 60-second
+  // preset still produces a 60-second video.
+  const travel = Math.max(5, opts.duration - stops.length * hold - INTRO - OUTRO);
   timeline = [];
   let from = 0, clock = 0;
+
+  timeline.push({ kind: 'establish', start: 0, end: INTRO });
+  clock = INTRO;
 
   const leg = (a, b) => {
     const d = travel * (b - a);
@@ -94,6 +116,9 @@ function buildTimeline() {
     from = s;
   });
   leg(from, 1);
+
+  timeline.push({ kind: 'reveal', start: clock, end: clock + OUTRO });
+  clock += OUTRO;
   return clock;
 }
 
@@ -102,6 +127,14 @@ const totalDuration = () => timeline[timeline.length - 1].end;
 // Maps video time onto {progress, photo being held, how far into the hold}.
 function stateAt(time) {
   const seg = timeline.find((s) => time >= s.start && time <= s.end) ?? timeline[timeline.length - 1];
+  if (seg.kind === 'establish' || seg.kind === 'reveal') {
+    return {
+      progress: seg.kind === 'establish' ? 0 : 1,
+      photo: null,
+      phase: seg.end === seg.start ? 1 : (time - seg.start) / (seg.end - seg.start),
+      shot: seg.kind,
+    };
+  }
   if (seg.kind === 'hold') {
     return { progress: seg.at, photo: hike.photos[seg.photo], phase: (time - seg.start) / (seg.end - seg.start) };
   }
@@ -160,7 +193,18 @@ async function initMap(stale) {
     paint: {
       'line-color': '#ffffff',
       'line-opacity': 0.45,
-      'line-width': ['interpolate', ['linear'], ['zoom'], 11, 1.5, 14, 3, 16, 5],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2.4, 14, 3, 16, 5],
+    } });
+
+  // The hops the route makes across recording gaps, dashed so they read as
+  // "no data here" rather than as a path.
+  m.addSource('routegap', { type: 'geojson', data: gapLinesTo(1) });
+  m.addLayer({ id: 'routegap', type: 'line', source: 'routegap',
+    paint: {
+      'line-color': '#ffffff',
+      'line-opacity': 0.3,
+      'line-dasharray': [2, 2.5],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2.4, 14, 3, 16, 5],
     } });
 
   // The part already walked, drawn bright on top.
@@ -169,13 +213,22 @@ async function initMap(stale) {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': '#ff6b35', 'line-opacity': 0.45, 'line-blur': 10,
-      'line-width': ['interpolate', ['linear'], ['zoom'], 11, 9, 14, 18, 16, 26],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 10, 11, 14, 18, 16, 26],
     } });
+  m.addSource('trailgap', { type: 'geojson', data: gapLinesTo(0) });
   m.addLayer({ id: 'trail', type: 'line', source: 'trail',
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': '#ff6b35',
-      'line-width': ['interpolate', ['linear'], ['zoom'], 11, 2.5, 14, 5, 16, 8],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 10, 3.2, 14, 5, 16, 8],
+    } });
+
+  m.addLayer({ id: 'trailgap', type: 'line', source: 'trailgap',
+    paint: {
+      'line-color': '#ff6b35',
+      'line-opacity': 0.75,
+      'line-dasharray': [2, 2.5],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 10, 3.2, 14, 5, 16, 8],
     } });
 
   m.addSource('here', { type: 'geojson', data: pointOf(pts[0]) });
@@ -203,6 +256,8 @@ async function initMap(stale) {
       'circle-stroke-width': 2,
     } });
 
+  overview = findOverview(m);
+
   // Published only now that it is fully built: everything else in the app
   // reaches the map through this global.
   building = null;
@@ -212,13 +267,43 @@ async function initMap(stale) {
 
 const pointOf = (p) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [p.lon, p.lat] } });
 
+// A MultiLineString rather than one run of coordinates: every recording gap
+// ends the current piece and starts a new one, so nothing is drawn across a
+// stretch that was never recorded. An empty result is legal GeoJSON and draws
+// nothing, which is what lineOf(0, 0) should do anyway.
 function lineOf(fromProgress, toProgress) {
   const total = pts[pts.length - 1].dist;
-  const coords = pts
-    .filter((p) => p.dist >= fromProgress * total && p.dist <= toProgress * total)
-    .map((p) => [p.lon, p.lat]);
-  if (coords.length < 2) coords.push(coords[0] ?? [pts[0].lon, pts[0].lat]);
-  return { type: 'Feature', geometry: { type: 'LineString', coordinates: coords } };
+  const lo = fromProgress * total, hi = toProgress * total;
+  const parts = [];
+  let run = [];
+
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    if (p.dist < lo || p.dist > hi) continue;
+    run.push([p.lon, p.lat]);
+    if (gapAfter.has(i)) {
+      if (run.length > 1) parts.push(run);
+      run = [];
+    }
+  }
+  if (run.length > 1) parts.push(run);
+
+  return { type: 'Feature', geometry: { type: 'MultiLineString', coordinates: parts } };
+}
+
+// The straight hops across those gaps, drawn dashed and only once reached, so
+// the viewer can see that the route continues without being told a path was
+// walked there.
+function gapLinesTo(toProgress) {
+  const total = pts[pts.length - 1].dist;
+  const limit = toProgress * total;
+  const parts = [];
+
+  for (const i of gapAfter) {
+    const a = pts[i], b = pts[i + 1];
+    if (a && b && a.dist <= limit) parts.push([[a.lon, a.lat], [b.lon, b.lat]]);
+  }
+  return { type: 'Feature', geometry: { type: 'MultiLineString', coordinates: parts } };
 }
 
 /* ------------------------------------------------------------ render loop */
@@ -239,7 +324,7 @@ const MAX_DUCK = 34;        // most degrees of pitch we will give up
 // latter reported 4949 m before tiles and 5566 m after for the same camera. A
 // frame renderer cannot have its framing depend on network timing, so we use
 // the one source of truth that is always fully loaded: the track itself.
-function placeCamera(here, bearing, basePitch, baseZoom) {
+function chaseCamera(here, bearing, basePitch, baseZoom) {
   // How much higher than the hiker the ground behind rises. That ground is what
   // the camera would otherwise be buried in.
   let highest = here.ele;
@@ -252,7 +337,7 @@ function placeCamera(here, bearing, basePitch, baseZoom) {
   // rise per degree matches the camera geometry at these zooms closely enough.
   const duck = Math.min(MAX_DUCK, rise / 25);
 
-  map.jumpTo({
+  return {
     center: [here.lon, here.lat],
     bearing,
     pitch: Math.max(24, basePitch - duck),
@@ -260,8 +345,62 @@ function placeCamera(here, bearing, basePitch, baseZoom) {
     zoom: baseZoom - duck * 0.012,
     // Pushes the hiker into the lower third instead of dead centre.
     padding: { top: map.getCanvas().clientHeight * 0.34, bottom: 0, left: 0, right: 0 },
-  });
+  };
 }
+
+// Split from the above so the opening and closing shots can interpolate
+// *towards* a chase position without having to apply it first.
+const placeCamera = (...args) => map.jumpTo(chaseCamera(...args));
+
+/* --------------------------------------------------- opening and closing */
+
+// Where the camera sits to show the whole route at once. Computed on load,
+// because cameraForBounds needs a laid-out map.
+let overview = null;
+
+function findOverview(m) {
+  const b = new maplibregl.LngLatBounds([pts[0].lon, pts[0].lat], [pts[0].lon, pts[0].lat]);
+  for (const p of pts) b.extend([p.lon, p.lat]);
+
+  const bearing = staticHeading(0);
+  const cam = m.cameraForBounds(b, { padding: 70, bearing });
+  return {
+    center: [cam.center.lng, cam.center.lat],
+    // cameraForBounds frames a flat map; tilting one pushes the far end of the
+    // route towards the horizon, so give it a little more room.
+    zoom: cam.zoom - 0.4,
+    bearing,
+    pitch: 50,
+    padding: { top: 0, bottom: 0, left: 0, right: 0 },
+  };
+}
+
+// Heading without the smoothing anim.bearing applies — the establishing shot
+// needs a fixed direction to aim at, not one that chases the last frame.
+function staticHeading(progress) {
+  const total = pts[pts.length - 1].dist;
+  const step = Math.min(90 / total, 0.05);
+  const a = progress >= 1 ? Math.max(0, 1 - step) : progress;
+  const b = progress >= 1 ? 1 : Math.min(1, progress + step);
+  return bearingBetween(sampleAt(a), sampleAt(b));
+}
+
+const lerp = (a, b, f) => a + (b - a) * f;
+
+function blendCamera(from, to, f) {
+  const turn = ((to.bearing - from.bearing + 540) % 360) - 180;   // shortest way round
+  return {
+    center: [lerp(from.center[0], to.center[0], f), lerp(from.center[1], to.center[1], f)],
+    zoom: lerp(from.zoom, to.zoom, f),
+    pitch: lerp(from.pitch, to.pitch, f),
+    bearing: from.bearing + turn * f,
+    padding: { top: lerp(from.padding.top, to.padding.top, f), bottom: 0, left: 0, right: 0 },
+  };
+}
+
+// Slow at both ends, quick through the middle — the move reads as deliberate
+// rather than as a cut.
+const easeInOut = (f) => (f < 0.5 ? 2 * f * f : 1 - (-2 * f + 2) ** 2 / 2);
 
 let ascentSoFar = 0;
 
@@ -269,18 +408,31 @@ function applyState(time) {
   const st = stateAt(time);
   const here = sampleAt(st.progress);
 
-  // On a photo hold the camera keeps drifting slowly — a dead-still frame reads
-  // as a freeze, a slow rotation reads as the hiker looking around.
-  const drift = st.photo ? st.phase * 22 : 0;
-  const bearing = st.photo ? (anim.bearing ?? 0) + drift : headingAt(st.progress);
+  if (st.shot) {
+    // The chase position this shot departs from or arrives at.
+    const heading = staticHeading(st.shot === 'establish' ? 0 : 1);
+    // Seed the smoother so the first travel frame continues from here instead
+    // of snapping to a heading it has never seen.
+    anim.bearing = heading;
 
-  placeCamera(
-    here, bearing,
-    st.photo ? opts.pitch - 8 : opts.pitch,
-    st.photo ? opts.zoom + 0.35 : opts.zoom
-  );
+    const chase = chaseCamera(here, heading, opts.pitch, opts.zoom);
+    const f = easeInOut(st.phase);
+    map.jumpTo(blendCamera(overview, chase, st.shot === 'establish' ? f : 1 - f));
+  } else {
+    // On a photo hold the camera keeps drifting slowly — a dead-still frame
+    // reads as a freeze, a slow rotation reads as the hiker looking around.
+    const drift = st.photo ? st.phase * 22 : 0;
+    const bearing = st.photo ? (anim.bearing ?? 0) + drift : headingAt(st.progress);
+
+    placeCamera(
+      here, bearing,
+      st.photo ? opts.pitch - 8 : opts.pitch,
+      st.photo ? opts.zoom + 0.35 : opts.zoom
+    );
+  }
 
   map.getSource('trail').setData(lineOf(0, st.progress));
+  map.getSource('trailgap').setData(gapLinesTo(st.progress));
   map.getSource('here').setData(pointOf(here));
 
   ascentSoFar = ascentUpTo(here.index);
@@ -638,6 +790,8 @@ function teardown() {
   shownPhoto = null;
   ascentSoFar = 0;
   timeline = [];
+  gapAfter = new Set();
+  overview = null;
   photoCache.clear();
   $('photoCard').classList.remove('on');
   $('photoImg').removeAttribute('src');
@@ -678,6 +832,7 @@ async function loadHike(id) {
   hike = data;
   hikeId = data.id;
   pts = unpack(hike.track.points);
+  markGaps(hike.track.gaps);
   startTime = hike.track.stats.startTime;
 
   // Keep the URL addressing this hike, so a reload — and the headless renderer,
